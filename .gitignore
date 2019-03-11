@@ -328,3 +328,5 @@ ASALocalRun/
 
 # MFractors (Xamarin productivity tool) working folder 
 .mfractor/
+/Big_data_ML/Big_data_ML/train.csv
+/Big_data_ML/Big_data_ML/test.csv
