@@ -7,15 +7,13 @@ import matplotlib.pyplot as plt
 from sklearn.preprocessing import LabelEncoder
 from sklearn.linear_model import LogisticRegression
 from sklearn.metrics import confusion_matrix, classification_report, roc_auc_score, roc_curve
-from sklearn.model_selection import train_test_split
+from sklearn.model_selection import train_test_split, cross_val_score, cross_val_predict
+from sklearn.externals import joblib
 
 from pyspark.sql import SparkSession
 from pyspark.sql.functions import isnan, when, count, col
 
 from data_types import *
-
-
-
 
 
 def read_csv(filePath):
@@ -161,6 +159,10 @@ def run_data_analysis():
     plt.title('Correlation between from 61th to the last columns')
     plt.show()
 
+def exrport_model(model, filename = 'finalized_model.sav'):
+    # save the model to disk
+    joblib.dump(model, filename)
+
 def train_model(Sample_size, features, label, ALL_DATA = False):
     if ALL_DATA:
         train = pd.read_csv("./train.csv", 
@@ -181,20 +183,25 @@ def train_model(Sample_size, features, label, ALL_DATA = False):
     train = train.fillna(0)
     train = reduce_mem_usage(train)
     free_memory()
-    X_train, X_test, y_train, y_test = train_test_split(train[features], train[label], test_size=0.3, random_state=0)
-    logreg = LogisticRegression()
+    X_train, X_test, y_train, y_test = train_test_split(train[features], train[label], test_size=0.3, random_state=2018)
+    
+    logreg = LogisticRegression(C=0.1 ,penalty='l1',n_jobs = -1, random_state= 2018)
+    #results  = cross_val_score(logreg, X_train, y_train, scoring='roc_auc', cv=3, n_jobs = -1)  
     logreg.fit(X_train, y_train)
-
+    exrport_model(logreg,'logreg.sav')
     y_pred = logreg.predict(X_test)
-    print('Accuracy of logistic regression classifier on test set: {:.2f}'.format(logreg.score(X_test, y_test)))
+    #y_pred = cross_val_predict(logreg, X_test, y_test, scoring='roc_auc', cv=3, n_jobs = -1)
+    #print('\ntest results = {}\n'.format(y_pred))
+    #print('Accuracy of logistic regression classifier on test set: {:.2f}'.format(np.mean(results)))
 
     confusionmatrix = confusion_matrix(y_test, y_pred)
     print(confusionmatrix)
 
     print(classification_report(y_test, y_pred))
-
-    logit_roc_auc = roc_auc_score(y_test, logreg.predict(X_test))
-    fpr, tpr, thresholds = roc_curve(y_test, logreg.predict_proba(X_test)[:,1])
+    proba = logreg.predict_log_proba(X_test)
+    #proba = cross_val_predict(logreg, X_test, y_test, scoring='roc_auc', cv=3, method='predict_proba', n_jobs = -1)
+    logit_roc_auc = roc_auc_score(y_test, y_pred)
+    fpr, tpr, thresholds = roc_curve(y_test, proba[:,1])
     plt.figure()
     plt.plot(fpr, tpr, label='Logistic Regression (area = %0.2f)' % logit_roc_auc)
     plt.plot([0, 1], [0, 1],'r--')
@@ -207,13 +214,47 @@ def train_model(Sample_size, features, label, ALL_DATA = False):
     plt.savefig('Log_ROC')
     plt.show()
 
+def test_pararmeter(Sample_size, features, label):
+    from sklearn.model_selection import GridSearchCV
+    train = pd.read_csv("./train.csv", 
+                            dtype= col_to_load,
+                            usecols= col_to_load.keys(),
+                            nrows= Sample_size)
+    # Pre-process step
+    print('Preprocessing ...')
+    le = LabelEncoder()
+    # Convert categorty type to int
+    for cols in train:
+       if train[cols].dtype.name == 'category':
+            train[cols] = le.fit_transform(train[cols].astype(str))
+            free_memory()
+    train = train.fillna(0)
+
+    train = reduce_mem_usage(train)
+    free_memory()
+    X_train, X_test, y_train, y_test = train_test_split(train[features], train[label], test_size=0.3, random_state=2018)
+    # set dictionary of para
+    grid={"C":np.logspace(-3,3,7), "penalty":["l1","l2"]}# l1 lasso l2 ridge
+
+    #Start testing
+    print('Start test ...')
+    logreg=LogisticRegression()
+    logreg_cv=GridSearchCV(logreg, grid, cv=5, scoring='roc_auc', n_jobs = -1)
+    logreg_cv.fit(X_train,y_train)
+    print('\n------------------------\nEnd test\n')
+    print("tuned hpyerparameters :(best parameters) ",logreg_cv.best_params_)
+    print("accuracy :",logreg_cv.best_score_)
+
 
 def main():
    #
    ks = list(col_to_load)
    features = ks[:68]
    label ='HasDetections'
-   train_model(2000000, features,label)
+   #test_pararmeter(1000000, features,label)
+   train_model(5000,features,label)
+   
+
 
 if __name__ =='__main__':
     main() 
