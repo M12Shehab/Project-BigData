@@ -24,8 +24,12 @@
     <Compile Include="data_types.py">
       <SubType>Code</SubType>
     </Compile>
+    <Compile Include="knn_impute.py">
+      <SubType>Code</SubType>
+    </Compile>
   </ItemGroup>
   <ItemGroup>
+    <Content Include="AvSigVersionTimestamps.npy" />
     <Content Include="test.csv" />
     <Content Include="train.csv" />
   </ItemGroup>
