@@ -9,19 +9,24 @@ from sklearn.preprocessing import LabelEncoder, StandardScaler, MinMaxScaler, no
 from sklearn.decomposition import PCA
 from sklearn.linear_model import LogisticRegression
 from sklearn.ensemble import RandomForestClassifier
+from sklearn.cluster import KMeans
+from sklearn.neighbors import KNeighborsClassifier
 from sklearn.metrics import confusion_matrix, classification_report, roc_auc_score, roc_curve
 from sklearn.model_selection import train_test_split, cross_val_score, cross_val_predict
 from sklearn.externals import joblib
 
-from pyspark.sql import SparkSession
-from pyspark.sql.functions import isnan, when, count, col
+#from pyspark.sql import SparkSession
+#from pyspark.sql.functions import isnan, when, count, col
+#from pyspark.ml.feature import StandardScaler, VectorAssembler
+#from pyspark.ml.clustering import KMeans
+
 
 from data_types import *
 
 from knn_impute import knn_impute
 
 
-def read_csv(filePath):
+def read_csv(spark,filePath):
     df = spark.read.csv(filePath, inferSchema= True, header= True)
     df.printSchema()
     return df
@@ -234,7 +239,7 @@ def train_model(Sample_size, features, label, ALL_DATA = False):
     exrport_model(logreg,'logreg.sav')
     
     print('Predicting data ....')
-    y_pred = rfe.predict(X_test)
+    #y_pred = rfe.predict(X_test)
 
     Y_new = rfe.transform(Y_std)
     rfe.fit(X_new,y_train)
@@ -291,32 +296,24 @@ def train_modelRF(Sample_size, features, label, ALL_DATA = False):
         if train[cols].dtype.name == 'category':
             train[cols] = le.fit_transform(train[cols].astype(str))
         free_memory()
-    train = train.fillna(train.mean())
+    train = train.fillna(-1)
     train = reduce_mem_usage(train)
     free_memory()
     
-    X_train, X_test, y_train, y_test = train_test_split(train[features], train[label], test_size=0.3, random_state=2018)
+    X_train, X_test, y_train, y_test = train_test_split(train[features], train[label], test_size=0.33, random_state=2018)
 
-    ## Standardizing the features
-    #X_train = StandardScaler(with_std=True).fit_transform(X_train)
-    #X_test = StandardScaler(with_std=True).fit_transform(X_test)
+    # Standardizing the features
+    X_train = StandardScaler(with_mean=True).fit_transform(X_train)
+    X_test = StandardScaler(with_mean=True).fit_transform(X_test)
 
-    #pca = PCA(n_components=9,random_state=2018)
-    #X_train = pca.fit_transform(X_train)
-    #X_test = pca.fit_transform(X_test)
+    X_train = normalize(X_train, norm='l1')
+    X_test = normalize(X_test, norm='l1')
 
-    ## Standardizing the features
-    #X_train = StandardScaler(with_std=True).fit_transform(X_train)
-    #X_test = StandardScaler(with_std=True).fit_transform(X_test)
-
-    X_train = normalize(X_train, norm='l2')
-    X_test = normalize(X_test, norm='l2')
-
-    cv = 3
-    rf = RandomForestClassifier(random_state=2018, n_jobs = -1, verbose=True,criterion='entropy',max_depth=25,min_samples_split=10,n_estimators=1001)
-    rfe = RFECV(estimator=rf, cv=4, scoring='roc_auc',n_jobs = -1)
-    #score  = cross_val_score(rf, X_train, y_train, scoring='roc_auc', cv=cv, n_jobs = -1)  
-    #print("Training score = {}".format(str(score.mean())))
+    cv = 10
+    rf = RandomForestClassifier(random_state=2018, n_jobs = -1, verbose=True, criterion='entropy', max_depth=25, min_samples_split=10,n_estimators=1001)
+    #rfe = RFECV(estimator=rf, cv=4, scoring='roc_auc',n_jobs = -1)
+    score  = cross_val_score(rf, X_train, y_train, scoring='roc_auc', cv=cv, n_jobs = -1)  
+    print("Training score = {}".format(str(score.mean())))
 
 
     #y_pred = cross_val_predict(rf, X_test, y_test, cv=cv)
@@ -346,21 +343,21 @@ def train_modelRF(Sample_size, features, label, ALL_DATA = False):
     ##plt.savefig('RandomForest_ROC')
     #plt.show()
 
-    print('Training model ....')
-    X_new = rfe.fit_transform(X_train, y_train)
+    #print('Training model ....')
+    #rf.fit(X_train, y_train)
     
     #features_index = rfe.get_support(indices=True)
     
     #print(report)
-    print('Exporting model ....')
-    exrport_model(logreg,'logreg.sav')
+    #print('Exporting model ....')
+    #exrport_model(rf,'RF.sav')
     
     print('Predicting data ....')
-    y_pred = rfe.predict(X_test)
+    #y_pred = rfe.predict(X_test)
 
-    X_test = rfe.transform(X_test)
-    rfe.fit(X_train,y_train)
-    y_pred = rfe.predict(X_test)
+    #X_test = rfe.transform(X_test)
+    #rfe.fit(X_train, y_train)
+    y_pred = cross_val_predict(rf, X_test, y_test,cv=cv)
    
     print("Test report...")
     confusionmatrix = confusion_matrix(y_test, y_pred)
@@ -368,12 +365,12 @@ def train_modelRF(Sample_size, features, label, ALL_DATA = False):
    
 
     print(classification_report(y_test, y_pred))
-    proba = rfe.predict_log_proba(X_test)
+    proba = cross_val_predict(rf, X_test, y_test, cv=cv, method='predict_proba', n_jobs = -1)
 
-    logit_roc_auc = roc_auc_score(y_test, y_pred)
+    rf_roc_auc = roc_auc_score(y_test, y_pred)
     fpr, tpr, thresholds = roc_curve(y_test, proba[:,1])
     plt.figure()
-    plt.plot(fpr, tpr, label='Random Forest (area = %0.2f)' % logit_roc_auc)
+    plt.plot(fpr, tpr, label='Random Forest (area = %0.2f)' % rf_roc_auc)
     plt.plot([0, 1], [0, 1],'r--')
     plt.xlim([0.0, 1.0])
     plt.ylim([0.0, 1.05])
@@ -495,15 +492,202 @@ def test_pararmeter(Sample_size, features, label):
     print("tuned hpyerparameters :(best parameters) ",rf_cv.best_params_)
     print("accuracy :",rf_cv.best_score_)
 
+def test_best_kmean(Sample_size, features):
+    print("Load dataset ...")
+    train = pd.read_csv("./train.csv", 
+                            dtype= col_to_load,
+                            usecols= col_to_load.keys(),
+                            nrows= Sample_size)
+    # Pre-process step
+    print('Preprocessing ...')
+    le = LabelEncoder()
+    # Convert categorty type to int
+    for cols in train:
+       if train[cols].dtype.name == 'category':
+            train[cols] = le.fit_transform(train[cols].astype(str))
+            free_memory()
+    train = train.fillna(-1)
+    train = reduce_mem_usage(train)   
+    free_memory()
+
+    train = normalize(train, norm='l2')
+    
+    Sum_of_squared_distances = []
+
+    K = range(1,35)
+    for k in K:
+        print("test k = {}".format(str(k)))
+        km = KMeans(n_clusters=k, n_jobs=-1)
+        km = km.fit(train)
+        Sum_of_squared_distances.append(km.inertia_)
+        print("Error = {}".format(str(km.inertia_)))
+    
+    print(km.cluster_centers_)
+    df_centers = pd.DataFrame(km.cluster_centers_)
+    df_centers.to_csv('kmean_centers.csv')
+    plt.plot(K, Sum_of_squared_distances, 'bx-')
+    plt.xlabel('k')
+    plt.ylabel('Sum_of_squared_distances')
+    plt.title('Elbow Method For Optimal k with sample size '+str(Sample_size))
+    plt.grid()
+    plt.savefig('Elbow Method')
+    plt.show()
+
+def export_newData(Sample_size, features, label):
+    print("Load dataset ...")
+    train = pd.read_csv("./train.csv", 
+                            dtype= col_to_load,
+                            usecols= col_to_load.keys(),
+                            nrows= Sample_size)
+    # Pre-process step
+    print('Preprocessing ...')
+    le = LabelEncoder()
+    # Convert categorty type to int
+    for cols in train:
+       if train[cols].dtype.name == 'category':
+            train[cols] = le.fit_transform(train[cols].astype(str))
+            free_memory()
+    train = train.fillna(-1)
+    train = reduce_mem_usage(train)   
+    free_memory()
+    
+    X_train, X_test, y_train, y_test = train_test_split(train[features], train[label], test_size=0.3, random_state=2018)
+    # Standardizing the features
+    X_train = StandardScaler(with_mean=True).fit_transform(X_train)
+    X_test = StandardScaler(with_mean=True).fit_transform(X_test)
+    
+    X_train = normalize(X_train, norm='l1')
+    X_test = normalize(X_test, norm='l1')
+
+    print('Start Kmean ...')
+    km = KMeans(n_clusters= 201, n_jobs=-1,max_iter=1500)
+    km = km.fit(X_train)
+    
+    #distances = np.column_stack([np.sum((X_train - center)**2, axis=1)**0.5 for center in km.cluster_centers_])
+    centers = km.cluster_centers_
+    predictions = km.predict(X_train)
+    print('Finish Kmean ...')
+    free_memory()
+    index = 0
+    tf_0={}
+    tf_1={}
+    print('Prepare dataset ...')
+    for idx in y_train.values:
+        #if tf.keys().__contains__(predictions[idx])
+        if idx == 0:
+            if predictions[index] not in tf_0:
+                tf_0[predictions[index]] = 1
+            else:
+                tf_0[predictions[index]] += 1
+        else:
+            if predictions[index] not in tf_1:
+                tf_1[predictions[index]] = 1
+            else:
+                tf_1[predictions[index]]+=1
+        index+=1
+    
+    label_0=[]
+    label_1=[]
+    for k, v in tf_0.items():
+        if k in tf_1:
+            if tf_0[k] > tf_1[k]:
+                if k not in label_0:
+                    label_0.append(k)
+            elif tf_0[k] < tf_1[k]:
+                if tf_0[k] not in label_1:
+                    label_1.append(k)
+            else:
+                print('label {} is equals'.format(k))
+        else:
+            if tf_0[k] not in label_1:
+                    label_1.append(k)
+    X = []
+    Y = []
+    for l in label_0:
+        X.append(centers[l])
+        Y.append(0)
+
+    for l in label_1:
+        X.append(centers[l])
+        Y.append(1)
+    free_memory()
+    print('Finish dataset ...')
+    print('Start K-nn ...')
+    
+    ## creating odd list of K for KNN
+    #myList = list(range(1,70))
+    ## subsetting just the odd ones
+    #neighbors = myList[0::2]#filter(lambda x: x % 2 != 0, myList)
+
+    ## empty list that will hold cv scores
+    #cv_scores = []
+
+    ## perform 10-fold cross validation
+    #for k in neighbors:
+    #    print("start {} as k...".format(k))
+    #    knn = KNeighborsClassifier(n_neighbors=k)
+    #    scores = cross_val_score(knn, X_train, y_train, cv=4, scoring='roc_auc')
+    #    cv_scores.append(scores.mean())
+    #    print("finish {} as k...".format(k))
+   
+    ## changing to misclassification error
+    #MSE = [1 - x for x in cv_scores]
+
+
+    ## determining best k
+    #optimal_k = neighbors[MSE.index(min(MSE))]
+    #print("The optimal number of neighbors is {}".format(optimal_k))
+
+    ## plot misclassification error vs k
+    #plt.plot(neighbors, MSE)
+    #plt.xlabel('Number of Neighbors K')
+    #plt.ylabel('Misclassification Error')
+    #plt.grid()
+    #plt.show()
+    cv = 10
+    neigh = KNeighborsClassifier(n_neighbors=69,n_jobs=-1,algorithm='kd_tree')
+    score  = cross_val_score(neigh, X_train, y_train, scoring='roc_auc', cv=cv, n_jobs = -1)  
+    print("Training score = {}".format(str(score.mean())))
+    #neigh.fit(X, Y) 
+    print("Predicting ...")
+    y_pred = cross_val_predict(neigh, X_test, y_test,cv=cv)
+    #y_pred = neigh.predict(X_test)
+   
+    print("Test report...")
+    confusionmatrix = confusion_matrix(y_test, y_pred)
+    print(confusionmatrix)
+   
+    free_memory()
+    print(classification_report(y_test, y_pred))
+    proba = cross_val_predict(neigh, X_test, y_test, cv=cv, method='predict_proba', n_jobs = -1)
+
+    #proba = neigh.predict_proba(X_test)
+    #proba = cross_val_predict(logreg, X_test, y_test, scoring='roc_auc', cv=3, method='predict_proba', n_jobs = -1)
+    knn_roc_auc = roc_auc_score(y_test, y_pred)
+    fpr, tpr, thresholds = roc_curve(y_test, proba[:,1])
+    plt.figure()
+    plt.plot(fpr, tpr, label='K-nn + Kmean (area = %0.2f)' % knn_roc_auc)
+    plt.plot([0, 1], [0, 1],'r--')
+    plt.xlim([0.0, 1.0])
+    plt.ylim([0.0, 1.05])
+    plt.xlabel('False Positive Rate')
+    plt.ylabel('True Positive Rate')
+    plt.title('Receiver operating characteristic')
+    plt.legend(loc="lower right")
+    plt.savefig('KNN_KMEAN')
+    plt.show()
+    free_memory()
 
 def main():
    #
    ks = list(col_to_load)
    features = ks[:68]
    label ='HasDetections'
+   #test_best_kmean(1000000,features)
    #test_pararmeter(100000, features,label)
-   train_modelRF(10000, features,label)
+   #train_modelRF(300000, features,label)
    #train_model(10000,features,label)
+   export_newData(300000,features,label)
    #fill_missing_data_Knn(Sample_size=10000)
 
 
